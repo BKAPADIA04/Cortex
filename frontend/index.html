@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cortex</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app" id="app">
+    <div class="bg-glow"></div>
+
+    <div class="intro" id="intro">
+      <img class="logo" src="assets/logo.svg" alt="Cortex logo" />
+      <p class="intro-title">Ask Cortex anything</p>
+    </div>
+
+    <div class="messages" id="messages"></div>
+
+    <div class="suggestions" id="suggestions">
+      <p class="suggestions-label">Suggestions on what to ask Cortex</p>
+      <div class="chips">
+        <button class="chip">What can I ask you to do?</button>
+        <button class="chip">Which one of my projects is performing the best?</button>
+        <button class="chip">What projects should I be concerned about right now?</button>
+      </div>
+    </div>
+
+    <form class="composer" id="composer">
+      <input
+        type="text"
+        id="input"
+        placeholder="Ask me anything about your projects"
+        autocomplete="off"
+      />
+      <button type="submit" class="send-btn" aria-label="Send">
+        <img src="assets/send.svg" alt="" />
+      </button>
+    </form>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
