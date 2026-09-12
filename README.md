@@ -4,7 +4,20 @@ A stateful AI chatbot built with LangGraph, featuring memory, RAG, and tool call
 
 ## Running locally
 
-Start the backend and frontend in two separate terminals:
+Chat history is persisted in Postgres via LangGraph's `PostgresSaver` checkpointer. Start it
+with Docker before the backend:
+
+```
+docker compose up -d postgres
+```
+
+Set `DATABASE_URL` in `.env` (defaults to the credentials in `docker-compose.yml`):
+
+```
+DATABASE_URL=postgresql://cortex:cortex@localhost:5432/cortex
+```
+
+Then start the backend and frontend in two separate terminals:
 
 ```
 # terminal 1 — backend API
