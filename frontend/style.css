@@ -114,6 +114,69 @@ body {
   font-style: italic;
 }
 
+.bubble h1,
+.bubble h2,
+.bubble h3,
+.bubble h4,
+.bubble h5,
+.bubble h6 {
+  margin: 14px 0 6px;
+  line-height: 1.3;
+  color: #f4f2f7;
+}
+
+.bubble h1:first-child,
+.bubble h2:first-child,
+.bubble h3:first-child,
+.bubble h4:first-child,
+.bubble p:first-child {
+  margin-top: 0;
+}
+
+.bubble h1 { font-size: 18px; }
+.bubble h2 { font-size: 16px; }
+.bubble h3,
+.bubble h4,
+.bubble h5,
+.bubble h6 { font-size: 14px; }
+
+.bubble ul,
+.bubble ol {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
+.bubble li {
+  margin-bottom: 4px;
+}
+
+.bubble li:last-child {
+  margin-bottom: 0;
+}
+
+.bubble strong {
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.bubble em {
+  font-style: italic;
+}
+
+.bubble code {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 13px;
+}
+
+.bubble hr {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  margin: 12px 0;
+}
+
 .suggestions {
   position: relative;
   z-index: 1;
