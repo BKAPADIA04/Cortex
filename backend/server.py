@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 
@@ -31,3 +32,22 @@ def chat(request: ChatRequest):
         {"messages": [HumanMessage(content=request.message)]}, config=config
     )
     return ChatResponse(response=result["messages"][-1].text)
+
+
+@app.post("/chat/stream")
+def chat_stream(request: ChatRequest):
+    config = {"configurable": {"thread_id": request.thread_id}}
+
+    def token_generator():
+        for message_chunk, metadata in cortex_chatbot.stream(
+            {"messages": [HumanMessage(content=request.message)]},
+            config=config,
+            stream_mode="messages",
+        ):
+            if metadata.get("langgraph_node") != "chat_node":
+                continue
+            text = message_chunk.text
+            if text:
+                yield text
+
+    return StreamingResponse(token_generator(), media_type="text/plain")
