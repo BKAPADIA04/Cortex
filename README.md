@@ -8,6 +8,7 @@ multi-threaded conversations, wired up end to end from a Gemini-backed agent to 
 ![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C)
 ![Next.js](https://img.shields.io/badge/Next.js-15-000000?logo=next.js&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
+![LangSmith](https://img.shields.io/badge/LangSmith-1C3C3C)
 
 ## Tech stack
 
@@ -17,6 +18,7 @@ multi-threaded conversations, wired up end to end from a Gemini-backed agent to 
 | LLM               | [Gemini](https://ai.google.dev/) via `langchain-google-genai`                |
 | API               | [FastAPI](https://fastapi.tiangolo.com/) + `uvicorn`, streaming responses over HTTP |
 | Conversation memory | [PostgreSQL](https://www.postgresql.org/) via LangGraph's `PostgresSaver` checkpointer |
+| Observability     | [LangSmith](https://smith.langchain.com/) — traces every graph run, node, and LLM call |
 | Frontend          | [Next.js](https://nextjs.org/) (App Router) + React + TypeScript             |
 | Local infra       | Docker Compose (Postgres)                                                    |
 
@@ -26,6 +28,7 @@ multi-threaded conversations, wired up end to end from a Gemini-backed agent to 
 - Persistent conversation memory per thread, backed by Postgres (survives backend restarts)
 - Multi-chat sidebar — create, switch between, and delete independent conversation threads
 - Markdown-rendered responses (headings, lists, bold/italic, code, rules) with no external dependency
+- End-to-end tracing and observability via LangSmith (graph, node, and LLM-level runs)
 
 ## Running locally
 
@@ -40,6 +43,12 @@ docker compose up -d postgres
 ```bash
 GOOGLE_API_KEY=your-gemini-api-key
 DATABASE_URL=postgresql://cortex:cortex@localhost:5432/cortex
+
+# optional — enables LangSmith tracing for observability
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_ENDPOINT=https://api.smith.langchain.com
+LANGCHAIN_API_KEY=your-langsmith-api-key
+LANGCHAIN_PROJECT=cortex
 ```
 
 **3. Start the backend and frontend in two separate terminals:**
