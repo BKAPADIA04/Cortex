@@ -1,3 +1,5 @@
+import json
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -38,16 +40,36 @@ def chat(request: ChatRequest):
 def chat_stream(request: ChatRequest):
     config = {"configurable": {"thread_id": request.thread_id}}
 
-    def token_generator():
-        for message_chunk, metadata in cortex_chatbot.stream(
+    def event_generator():
+        for mode, chunk in cortex_chatbot.stream(
             {"messages": [HumanMessage(content=request.message)]},
             config=config,
-            stream_mode="messages",
+            stream_mode=["updates", "messages"],
         ):
-            if metadata.get("langgraph_node") != "chat_node":
-                continue
-            text = message_chunk.text
-            if text:
-                yield text
+            if mode == "updates":
+                for node_name, node_output in chunk.items():
+                    for msg in node_output.get("messages", []):
+                        if node_name == "chat_node":
+                            for call in getattr(msg, "tool_calls", None) or []:
+                                yield json.dumps({
+                                    "type": "tool_start",
+                                    "id": call["id"],
+                                    "tool": call["name"],
+                                    "input": call["args"],
+                                }) + "\n"
+                        elif node_name == "tools":
+                            yield json.dumps({
+                                "type": "tool_end",
+                                "id": msg.tool_call_id,
+                                "tool": msg.name,
+                                "output": str(msg.content)[:2000],
+                            }) + "\n"
+            elif mode == "messages":
+                message_chunk, metadata = chunk
+                if metadata.get("langgraph_node") != "chat_node":
+                    continue
+                text = message_chunk.text
+                if text:
+                    yield json.dumps({"type": "token", "content": text}) + "\n"
 
-    return StreamingResponse(token_generator(), media_type="text/plain")
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")

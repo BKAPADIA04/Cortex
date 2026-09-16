@@ -4,6 +4,7 @@ psycopg[binary,pool]
 langchain
 langchain_openai
 langchain-google-genai
+ddgs
 dotenv
 fastapi
 uvicorn

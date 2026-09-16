@@ -2,13 +2,49 @@
 
 import { useState } from "react";
 import { renderMarkdown } from "@/lib/markdown";
-import type { Message } from "@/lib/types";
+import type { Message, ToolCall } from "@/lib/types";
 
 const SUGGESTIONS = [
   "What can I ask you to do?",
   "Which one of my projects is performing the best?",
   "What projects should I be concerned about right now?",
 ];
+
+const TOOL_LABELS: Record<string, string> = {
+  duckduckgo_search: "Searching the web",
+  calculator: "Calculating",
+};
+
+function toolLabel(tool: string): string {
+  return TOOL_LABELS[tool] ?? `Running ${tool}`;
+}
+
+function toolQuery(call: ToolCall): string | null {
+  if (call.input && typeof call.input === "object") {
+    const values = Object.values(call.input as Record<string, unknown>);
+    if (values.length && typeof values[0] === "string") return values[0];
+  }
+  return null;
+}
+
+function ToolCallChip({ call }: { call: ToolCall }) {
+  const query = toolQuery(call);
+  return (
+    <div className={`tool-call${call.status === "running" ? " running" : " done"}`}>
+      <span className="tool-call-icon" aria-hidden="true">
+        {call.status === "running" ? (
+          <span className="tool-spinner" />
+        ) : (
+          <span className="tool-check">✓</span>
+        )}
+      </span>
+      <span className="tool-call-label">
+        {toolLabel(call.tool)}
+        {query ? `: "${query}"` : ""}
+      </span>
+    </div>
+  );
+}
 
 type ChatProps = {
   messages: Message[];
@@ -41,14 +77,31 @@ export default function Chat({ messages, started, onSend }: ChatProps) {
         {messages.map((m) => (
           <div key={m.id} className={`message-group ${m.label === "Me" ? "from-user" : "from-ai"}`}>
             <p className="message-label">{m.label}</p>
-            {m.label === "Me" || m.pending ? (
-              <div className={`bubble${m.pending ? " pending" : ""}`}>{m.text}</div>
-            ) : (
+
+            {!!m.toolCalls?.length && (
+              <div className="tool-calls">
+                {m.toolCalls.map((call) => (
+                  <ToolCallChip key={call.id} call={call} />
+                ))}
+              </div>
+            )}
+
+            {m.label === "Me" ? (
+              <div className="bubble">{m.text}</div>
+            ) : m.pending ? (
+              <div className="bubble pending">
+                <span className="thinking-dots">
+                  <span />
+                  <span />
+                  <span />
+                </span>
+              </div>
+            ) : m.text ? (
               <div
                 className="bubble"
                 dangerouslySetInnerHTML={{ __html: renderMarkdown(m.text) }}
               />
-            )}
+            ) : null}
           </div>
         ))}
       </div>

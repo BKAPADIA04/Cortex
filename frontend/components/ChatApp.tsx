@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import Chat from "@/components/Chat";
-import type { Thread } from "@/lib/types";
+import type { Message, Thread, ToolCall } from "@/lib/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/chat";
 const STREAM_URL = `${API_URL}/stream`;
@@ -79,20 +79,41 @@ export default function ChatApp() {
               messages: [
                 ...t.messages,
                 { id: userId, label: "Me" as const, text: trimmed },
-                { id: pendingId, label: "Cortex" as const, text: "Thinking…", pending: true },
+                { id: pendingId, label: "Cortex" as const, text: "", pending: true, toolCalls: [] },
               ],
             }
       )
     );
 
-    function updatePending(text: string, pending: boolean) {
+    function updatePendingMessage(updater: (m: Message) => Message) {
       setThreads((prev) =>
         prev.map((t) =>
           t.id !== threadId
             ? t
-            : { ...t, messages: t.messages.map((m) => (m.id === pendingId ? { ...m, text, pending } : m)) }
+            : { ...t, messages: t.messages.map((m) => (m.id === pendingId ? updater(m) : m)) }
         )
       );
+    }
+
+    function appendToken(content: string) {
+      updatePendingMessage((m) => ({ ...m, text: m.text + content, pending: false }));
+    }
+
+    function startTool(call: ToolCall) {
+      updatePendingMessage((m) => ({ ...m, toolCalls: [...(m.toolCalls ?? []), call], pending: false }));
+    }
+
+    function finishTool(id: string, output: string) {
+      updatePendingMessage((m) => ({
+        ...m,
+        toolCalls: (m.toolCalls ?? []).map((tc) =>
+          tc.id === id ? { ...tc, status: "done" as const, output } : tc
+        ),
+      }));
+    }
+
+    function finalizePending() {
+      updatePendingMessage((m) => ({ ...m, pending: false }));
     }
 
     try {
@@ -106,18 +127,37 @@ export default function ChatApp() {
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let accumulated = "";
+      let buffer = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        accumulated += decoder.decode(value, { stream: true });
-        updatePending(accumulated, false);
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const event = JSON.parse(line);
+          if (event.type === "token") {
+            appendToken(event.content);
+          } else if (event.type === "tool_start") {
+            startTool({ id: event.id, tool: event.tool, input: event.input, status: "running" });
+          } else if (event.type === "tool_end") {
+            finishTool(event.id, event.output);
+          }
+        }
       }
+
+      finalizePending();
     } catch (err) {
       console.error(err);
-      updatePending("Something went wrong reaching Cortex. Is the backend running?", false);
+      updatePendingMessage((m) => ({
+        ...m,
+        text: "Something went wrong reaching Cortex. Is the backend running?",
+        pending: false,
+      }));
     }
   }
 
