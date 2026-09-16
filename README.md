@@ -19,6 +19,7 @@ multi-threaded conversations, wired up end to end from a Gemini-backed agent to 
 | API               | [FastAPI](https://fastapi.tiangolo.com/) + `uvicorn`, streaming responses over HTTP |
 | Conversation memory | [PostgreSQL](https://www.postgresql.org/) via LangGraph's `PostgresSaver` checkpointer |
 | Observability     | [LangSmith](https://smith.langchain.com/) — traces every graph run, node, and LLM call |
+| Tools             | Web search ([DuckDuckGo](https://duckduckgo.com/) via `ddgs`) + calculator, called through a LangGraph `ToolNode` |
 | Frontend          | [Next.js](https://nextjs.org/) (App Router) + React + TypeScript             |
 | Local infra       | Docker Compose (Postgres)                                                    |
 
@@ -29,6 +30,21 @@ multi-threaded conversations, wired up end to end from a Gemini-backed agent to 
 - Multi-chat sidebar — create, switch between, and delete independent conversation threads
 - Markdown-rendered responses (headings, lists, bold/italic, code, rules) with no external dependency
 - End-to-end tracing and observability via LangSmith (graph, node, and LLM-level runs)
+- Tool calling — the agent can search the web (DuckDuckGo) and run calculations, with a live
+  execution indicator in the UI while a tool is running
+
+## Tools
+
+The agent can call tools mid-conversation when it decides it needs them, then use the results to
+answer. Defined in `backend/tools.py`:
+
+| Tool               | Purpose                                                              |
+| ------------------- | --------------------------------------------------------------------- |
+| `duckduckgo_search` | Web search for current events or facts, via the `ddgs` package (no API key) |
+| `calculator`        | Arithmetic evaluation (`+ - * / // % **`), via a restricted AST parser — no `eval()` |
+
+The frontend shows a chip for each tool call as it runs (spinner while in progress, checkmark
+when done) above the streamed reply.
 
 ## Running locally
 
