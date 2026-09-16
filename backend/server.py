@@ -71,7 +71,7 @@ async def chat_stream(request: ChatRequest):
                                 "type": "tool_end",
                                 "id": msg.tool_call_id,
                                 "tool": msg.name,
-                                "output": str(msg.content)[:2000],
+                                "output": msg.text[:2000],
                             }) + "\n"
             elif mode == "messages":
                 message_chunk, metadata = chunk

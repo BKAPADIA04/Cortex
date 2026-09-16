@@ -1,9 +1,7 @@
-import asyncio
 import ast
 import operator
 
-from ddgs import DDGS
-from langchain_core.tools import tool
+from mcp.server.fastmcp import FastMCP
 
 _OPERATORS = {
     ast.Add: operator.add,
@@ -28,7 +26,10 @@ def _eval_node(node: ast.AST) -> float:
     raise ValueError("Expression contains unsupported syntax")
 
 
-@tool
+mcp = FastMCP("cortex-calculator")
+
+
+@mcp.tool()
 def calculator(expression: str) -> str:
     """Evaluate a basic arithmetic expression (+, -, *, /, //, %, **, parentheses).
 
@@ -42,26 +43,5 @@ def calculator(expression: str) -> str:
         return f"Could not evaluate '{expression}': {exc}"
 
 
-def _search_sync(query: str) -> list[dict]:
-    with DDGS() as ddgs:
-        return list(ddgs.text(query, max_results=5))
-
-
-@tool
-async def duckduckgo_search(query: str) -> str:
-    """Search the web via DuckDuckGo for current or factual information.
-
-    Use this when the user asks about recent events, facts you're unsure
-    of, or anything that benefits from up-to-date web results.
-    """
-    results = await asyncio.to_thread(_search_sync, query)
-
-    if not results:
-        return "No results found."
-
-    return "\n\n".join(
-        f"{r['title']}\n{r['href']}\n{r['body']}" for r in results
-    )
-
-
-TOOLS = [duckduckgo_search, calculator]
+if __name__ == "__main__":
+    mcp.run(transport="stdio")

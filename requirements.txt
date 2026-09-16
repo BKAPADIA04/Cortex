@@ -5,6 +5,8 @@ langchain
 langchain_openai
 langchain-google-genai
 ddgs
+mcp
+langchain-mcp-adapters
 dotenv
 fastapi
 uvicorn
