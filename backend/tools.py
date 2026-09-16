@@ -1,3 +1,4 @@
+import asyncio
 import ast
 import operator
 
@@ -41,15 +42,19 @@ def calculator(expression: str) -> str:
         return f"Could not evaluate '{expression}': {exc}"
 
 
+def _search_sync(query: str) -> list[dict]:
+    with DDGS() as ddgs:
+        return list(ddgs.text(query, max_results=5))
+
+
 @tool
-def duckduckgo_search(query: str) -> str:
+async def duckduckgo_search(query: str) -> str:
     """Search the web via DuckDuckGo for current or factual information.
 
     Use this when the user asks about recent events, facts you're unsure
     of, or anything that benefits from up-to-date web results.
     """
-    with DDGS() as ddgs:
-        results = list(ddgs.text(query, max_results=5))
+    results = await asyncio.to_thread(_search_sync, query)
 
     if not results:
         return "No results found."

@@ -1,4 +1,5 @@
 import json
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,9 +7,17 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 
-from chatbot import cortex_chatbot
+import chatbot
 
-app = FastAPI(title="Cortex Chat API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.chatbot, app.state.pool = await chatbot.build_chatbot()
+    yield
+    await app.state.pool.close()
+
+
+app = FastAPI(title="Cortex Chat API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,20 +37,20 @@ class ChatResponse(BaseModel):
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest):
+async def chat(request: ChatRequest):
     config = {"configurable": {"thread_id": request.thread_id}}
-    result = cortex_chatbot.invoke(
+    result = await app.state.chatbot.ainvoke(
         {"messages": [HumanMessage(content=request.message)]}, config=config
     )
     return ChatResponse(response=result["messages"][-1].text)
 
 
 @app.post("/chat/stream")
-def chat_stream(request: ChatRequest):
+async def chat_stream(request: ChatRequest):
     config = {"configurable": {"thread_id": request.thread_id}}
 
-    def event_generator():
-        for mode, chunk in cortex_chatbot.stream(
+    async def event_generator():
+        async for mode, chunk in app.state.chatbot.astream(
             {"messages": [HumanMessage(content=request.message)]},
             config=config,
             stream_mode=["updates", "messages"],
