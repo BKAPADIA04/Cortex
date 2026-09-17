@@ -1,13 +1,18 @@
+import asyncio
 import json
+import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 
 import chatbot
+from rag import store
+from rag.config import ALLOWED_EXTENSIONS, MAX_FILE_SIZE_BYTES, UPLOAD_DIR
+from rag.errors import RagError
 
 
 @asynccontextmanager
@@ -34,6 +39,20 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     response: str
+
+
+class DocumentResponse(BaseModel):
+    doc_id: str
+    filename: str
+    chunks: int
+    pages: int | None = None
+
+
+class DocumentSummaryResponse(BaseModel):
+    doc_id: str
+    filename: str
+    chunks: int
+    uploaded_at: float
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -82,3 +101,51 @@ async def chat_stream(request: ChatRequest):
                     yield json.dumps({"type": "token", "content": text}) + "\n"
 
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+
+@app.post("/documents", response_model=DocumentResponse)
+async def upload_document(file: UploadFile = File(...)):
+    filename = file.filename or "upload"
+    ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{ext}'. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
+        )
+
+    contents = await file.read()
+    if len(contents) > MAX_FILE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File exceeds the {MAX_FILE_SIZE_BYTES // (1024 * 1024)}MB limit.",
+        )
+    if not contents:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    dest = UPLOAD_DIR / f"{uuid.uuid4().hex}{ext}"
+    dest.write_bytes(contents)
+
+    try:
+        result = await asyncio.to_thread(store.add_document, dest, filename)
+    except RagError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to process '{filename}': {exc}") from exc
+    finally:
+        dest.unlink(missing_ok=True)
+
+    return DocumentResponse(**result)
+
+
+@app.get("/documents", response_model=list[DocumentSummaryResponse])
+async def list_documents():
+    docs = await asyncio.to_thread(store.list_documents)
+    return [DocumentSummaryResponse(**d) for d in docs]
+
+
+@app.delete("/documents/{doc_id}")
+async def delete_document(doc_id: str):
+    deleted = await asyncio.to_thread(store.delete_document, doc_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    return {"deleted": doc_id}
