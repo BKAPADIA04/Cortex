@@ -6,12 +6,26 @@ export type ToolCall = {
   status: "running" | "done";
 };
 
+export type PendingToolApproval = {
+  type: "tool_approval";
+  calls: { id: string; tool: string; input: unknown }[];
+};
+
+export type PendingRetrievalReview = {
+  type: "retrieval_review";
+  toolCallId: string;
+  chunks: { index: number; source: string; text: string }[];
+};
+
+export type PendingInterrupt = PendingToolApproval | PendingRetrievalReview;
+
 export type Message = {
   id: number;
   label: "Me" | "Cortex";
   text: string;
   pending?: boolean;
   toolCalls?: ToolCall[];
+  interrupt?: PendingInterrupt;
 };
 
 export type Thread = {

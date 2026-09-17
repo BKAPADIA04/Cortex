@@ -3,10 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import Chat from "@/components/Chat";
-import type { Message, Thread, ToolCall, UploadedDocument } from "@/lib/types";
+import type { Message, PendingInterrupt, Thread, ToolCall, UploadedDocument } from "@/lib/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/chat";
 const STREAM_URL = `${API_URL}/stream`;
+const RESUME_URL = `${API_URL}/resume`;
 const API_ROOT = API_URL.replace(/\/chat$/, "");
 const DOCUMENTS_URL = `${API_ROOT}/documents`;
 const STORAGE_KEY = "cortex.threads";
@@ -111,31 +112,7 @@ export default function ChatApp() {
     });
   }
 
-  async function sendMessage(text: string) {
-    const trimmed = text.trim();
-    if (!trimmed || !activeThread) return;
-
-    const threadId = activeThread.id;
-    const isFirstMessage = activeThread.messages.length === 0;
-    const userId = nextId.current++;
-    const pendingId = nextId.current++;
-
-    setThreads((prev) =>
-      prev.map((t) =>
-        t.id !== threadId
-          ? t
-          : {
-              ...t,
-              title: isFirstMessage ? trimmed.slice(0, 40) : t.title,
-              messages: [
-                ...t.messages,
-                { id: userId, label: "Me" as const, text: trimmed },
-                { id: pendingId, label: "Cortex" as const, text: "", pending: true, toolCalls: [] },
-              ],
-            }
-      )
-    );
-
+  async function consumeStream(res: Response, threadId: string, pendingId: number) {
     function updatePendingMessage(updater: (m: Message) => Message) {
       setThreads((prev) =>
         prev.map((t) =>
@@ -163,22 +140,17 @@ export default function ChatApp() {
       }));
     }
 
-    function finalizePending() {
-      updatePendingMessage((m) => ({ ...m, pending: false }));
+    function setInterrupt(interrupt: PendingInterrupt | undefined) {
+      updatePendingMessage((m) => ({ ...m, interrupt, pending: false }));
     }
 
     try {
-      const res = await fetch(STREAM_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: trimmed, thread_id: threadId }),
-      });
-
       if (!res.ok || !res.body) throw new Error(`Request failed: ${res.status}`);
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let interrupted = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -197,11 +169,22 @@ export default function ChatApp() {
             startTool({ id: event.id, tool: event.tool, input: event.input, status: "running" });
           } else if (event.type === "tool_end") {
             finishTool(event.id, event.output);
+          } else if (event.type === "interrupt") {
+            interrupted = true;
+            setInterrupt(
+              event.payload.type === "tool_approval"
+                ? { type: "tool_approval", calls: event.payload.calls }
+                : {
+                    type: "retrieval_review",
+                    toolCallId: event.payload.tool_call_id,
+                    chunks: event.payload.chunks,
+                  }
+            );
           }
         }
       }
 
-      finalizePending();
+      if (!interrupted) updatePendingMessage((m) => ({ ...m, pending: false }));
     } catch (err) {
       console.error(err);
       updatePendingMessage((m) => ({
@@ -210,6 +193,61 @@ export default function ChatApp() {
         pending: false,
       }));
     }
+  }
+
+  async function resolveInterrupt(threadId: string, pendingId: number, value: unknown) {
+    setThreads((prev) =>
+      prev.map((t) =>
+        t.id !== threadId
+          ? t
+          : {
+              ...t,
+              messages: t.messages.map((m) =>
+                m.id === pendingId ? { ...m, interrupt: undefined, pending: true } : m
+              ),
+            }
+      )
+    );
+
+    const res = await fetch(RESUME_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ thread_id: threadId, value }),
+    });
+    await consumeStream(res, threadId, pendingId);
+  }
+
+  async function sendMessage(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || !activeThread) return;
+
+    const threadId = activeThread.id;
+    const isFirstMessage = activeThread.messages.length === 0;
+    const userId = nextId.current++;
+    const pendingId = nextId.current++;
+
+    setThreads((prev) =>
+      prev.map((t) =>
+        t.id !== threadId
+          ? t
+          : {
+              ...t,
+              title: isFirstMessage ? trimmed.slice(0, 40) : t.title,
+              messages: [
+                ...t.messages,
+                { id: userId, label: "Me" as const, text: trimmed },
+                { id: pendingId, label: "Cortex" as const, text: "", pending: true, toolCalls: [] },
+              ],
+            }
+      )
+    );
+
+    const res = await fetch(STREAM_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: trimmed, thread_id: threadId }),
+    });
+    await consumeStream(res, threadId, pendingId);
   }
 
   if (!activeThread) return null;
@@ -230,6 +268,7 @@ export default function ChatApp() {
         documents={documents}
         onUploadFiles={handleUploadFiles}
         onRemoveDocument={handleRemoveDocument}
+        onResolveInterrupt={(messageId, value) => resolveInterrupt(activeThread.id, messageId, value)}
       />
     </div>
   );

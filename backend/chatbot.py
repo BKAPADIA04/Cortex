@@ -1,15 +1,17 @@
 import os
+import re
 import sys
 from pathlib import Path
 
 from langgraph.graph import StateGraph, START, END
 from typing import TypedDict, Annotated
-from langchain_core.messages import BaseMessage, SystemMessage
+from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.prebuilt import tools_condition
+from langgraph.types import interrupt
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
@@ -35,17 +37,84 @@ class ChatbotState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
 
+# Tools whose calls pause the graph for a human approve/deny decision before
+# they run. Left out: calculator (pure, side-effect-free computation).
+APPROVAL_REQUIRED_TOOLS = {"duckduckgo_search", "retrieve_documents"}
+RETRIEVAL_TOOL = "retrieve_documents"
+
+_CHUNK_BLOCK_RE = re.compile(r"^\[(\d+)\] Source: (.+?)\n([\s\S]*)$")
+
+
+def _parse_retrieved_chunks(text: str) -> list[dict] | None:
+    """Parse rag_server._format_results' output back into structured chunks
+    for the retrieval-review UI. Returns None for non-chunk output (the "no
+    relevant information" / error strings), which needs no review step."""
+    blocks = re.split(r"\n\n(?=\[\d+\] Source: )", text)
+    chunks = []
+    for block in blocks:
+        match = _CHUNK_BLOCK_RE.match(block)
+        if not match:
+            return None
+        chunks.append({"index": int(match.group(1)), "source": match.group(2), "text": match.group(3)})
+    return chunks or None
+
+
 def _build_graph(tools):
     llm_with_tools = llm.bind_tools(tools)
+    tools_by_name = {t.name: t for t in tools}
 
     async def chat_node(state: ChatbotState):
         messages = state['messages']
         response = await llm_with_tools.ainvoke([SYSTEM_PROMPT, *messages])
         return {'messages': [response]}
 
+    async def execute_tools(state: ChatbotState):
+        calls = getattr(state['messages'][-1], "tool_calls", None) or []
+
+        gated = [c for c in calls if c["name"] in APPROVAL_REQUIRED_TOOLS]
+        decisions: dict[str, bool] = {}
+        if gated:
+            reply = interrupt({
+                "type": "tool_approval",
+                "calls": [{"id": c["id"], "tool": c["name"], "input": c["args"]} for c in gated],
+            })
+            decisions = (reply or {}).get("decisions", {})
+
+        results = []
+        for call in calls:
+            if call["name"] in APPROVAL_REQUIRED_TOOLS and not decisions.get(call["id"]):
+                results.append(ToolMessage(
+                    content="Denied by user — this action was not run.",
+                    name=call["name"],
+                    tool_call_id=call["id"],
+                ))
+                continue
+
+            output = await tools_by_name[call["name"]].ainvoke(call["args"])
+            output_text = output if isinstance(output, str) else str(output)
+
+            if call["name"] == RETRIEVAL_TOOL:
+                chunks = _parse_retrieved_chunks(output_text)
+                if chunks:
+                    reply = interrupt({
+                        "type": "retrieval_review",
+                        "tool_call_id": call["id"],
+                        "chunks": chunks,
+                    })
+                    selected = set((reply or {}).get("selected", [c["index"] for c in chunks]))
+                    kept = [c for c in chunks if c["index"] in selected]
+                    output_text = (
+                        "\n\n".join(f"[{c['index']}] Source: {c['source']}\n{c['text']}" for c in kept)
+                        if kept else "The user reviewed the retrieved passages and excluded all of them as irrelevant."
+                    )
+
+            results.append(ToolMessage(content=output_text, name=call["name"], tool_call_id=call["id"]))
+
+        return {"messages": results}
+
     graph = StateGraph(ChatbotState)
     graph.add_node('chat_node', chat_node)
-    graph.add_node('tools', ToolNode(tools))
+    graph.add_node('tools', execute_tools)
     graph.add_edge(START, "chat_node")
     graph.add_conditional_edges("chat_node", tools_condition, {"tools": "tools", END: END})
     graph.add_edge("tools", "chat_node")

@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
+from langgraph.types import Command
 
 import chatbot
 from rag import store
@@ -37,6 +38,11 @@ class ChatRequest(BaseModel):
     thread_id: str = "default"
 
 
+class ChatResumeRequest(BaseModel):
+    thread_id: str = "default"
+    value: dict
+
+
 class ChatResponse(BaseModel):
     response: str
 
@@ -64,43 +70,62 @@ async def chat(request: ChatRequest):
     return ChatResponse(response=result["messages"][-1].text)
 
 
-@app.post("/chat/stream")
-async def chat_stream(request: ChatRequest):
-    config = {"configurable": {"thread_id": request.thread_id}}
+def _stream_graph(graph_input, thread_id: str) -> StreamingResponse:
+    config = {"configurable": {"thread_id": thread_id}}
 
     async def event_generator():
-        async for mode, chunk in app.state.chatbot.astream(
-            {"messages": [HumanMessage(content=request.message)]},
-            config=config,
-            stream_mode=["updates", "messages"],
-        ):
-            if mode == "updates":
-                for node_name, node_output in chunk.items():
-                    for msg in node_output.get("messages", []):
-                        if node_name == "chat_node":
-                            for call in getattr(msg, "tool_calls", None) or []:
+        try:
+            async for mode, chunk in app.state.chatbot.astream(
+                graph_input,
+                config=config,
+                stream_mode=["updates", "messages"],
+            ):
+                if mode == "updates":
+                    for node_name, node_output in chunk.items():
+                        if node_name == "__interrupt__":
+                            for intr in node_output:
+                                yield json.dumps({"type": "interrupt", "payload": intr.value}) + "\n"
+                            return
+                        for msg in node_output.get("messages", []):
+                            if node_name == "chat_node":
+                                for call in getattr(msg, "tool_calls", None) or []:
+                                    yield json.dumps({
+                                        "type": "tool_start",
+                                        "id": call["id"],
+                                        "tool": call["name"],
+                                        "input": call["args"],
+                                    }) + "\n"
+                            elif node_name == "tools":
                                 yield json.dumps({
-                                    "type": "tool_start",
-                                    "id": call["id"],
-                                    "tool": call["name"],
-                                    "input": call["args"],
+                                    "type": "tool_end",
+                                    "id": msg.tool_call_id,
+                                    "tool": msg.name,
+                                    "output": msg.text[:2000],
                                 }) + "\n"
-                        elif node_name == "tools":
-                            yield json.dumps({
-                                "type": "tool_end",
-                                "id": msg.tool_call_id,
-                                "tool": msg.name,
-                                "output": msg.text[:2000],
-                            }) + "\n"
-            elif mode == "messages":
-                message_chunk, metadata = chunk
-                if metadata.get("langgraph_node") != "chat_node":
-                    continue
-                text = message_chunk.text
-                if text:
-                    yield json.dumps({"type": "token", "content": text}) + "\n"
+                elif mode == "messages":
+                    message_chunk, metadata = chunk
+                    if metadata.get("langgraph_node") != "chat_node":
+                        continue
+                    text = message_chunk.text
+                    if text:
+                        yield json.dumps({"type": "token", "content": text}) + "\n"
+        except Exception as exc:
+            yield json.dumps({"type": "error", "message": str(exc)}) + "\n"
 
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    return _stream_graph({"messages": [HumanMessage(content=request.message)]}, request.thread_id)
+
+
+@app.post("/chat/resume")
+async def chat_resume(request: ChatResumeRequest):
+    """Resume a graph run paused on `interrupt()` — the human's tool-approval
+    or retrieval-review decision goes in `value`, and the stream continues
+    with the same event format as /chat/stream."""
+    return _stream_graph(Command(resume=request.value), request.thread_id)
 
 
 @app.post("/documents", response_model=DocumentResponse)

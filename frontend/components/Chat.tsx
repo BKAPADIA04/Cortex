@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { renderMarkdown } from "@/lib/markdown";
+import InterruptCard from "@/components/InterruptCard";
 import type { Message, ToolCall, UploadedDocument } from "@/lib/types";
 
 const SUGGESTIONS = [
@@ -82,6 +83,7 @@ type ChatProps = {
   documents: UploadedDocument[];
   onUploadFiles: (files: FileList) => void;
   onRemoveDocument: (id: string) => void;
+  onResolveInterrupt: (messageId: number, value: unknown) => void;
 };
 
 export default function Chat({
@@ -91,6 +93,7 @@ export default function Chat({
   documents,
   onUploadFiles,
   onRemoveDocument,
+  onResolveInterrupt,
 }: ChatProps) {
   const [input, setInput] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -133,6 +136,12 @@ export default function Chat({
 
             {m.label === "Me" ? (
               <div className="bubble">{m.text}</div>
+            ) : m.interrupt ? (
+              <InterruptCard
+                interrupt={m.interrupt}
+                onApprove={(decisions) => onResolveInterrupt(m.id, { decisions })}
+                onReview={(selected) => onResolveInterrupt(m.id, { selected })}
+              />
             ) : m.pending ? (
               <div className="bubble pending">
                 <span className="thinking-dots">
