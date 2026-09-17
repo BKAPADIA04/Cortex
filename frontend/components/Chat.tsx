@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { renderMarkdown } from "@/lib/markdown";
-import type { Message, ToolCall } from "@/lib/types";
+import type { Message, ToolCall, UploadedDocument } from "@/lib/types";
 
 const SUGGESTIONS = [
   "What can I ask you to do?",
@@ -13,6 +13,8 @@ const SUGGESTIONS = [
 const TOOL_LABELS: Record<string, string> = {
   duckduckgo_search: "Searching the web",
   calculator: "Calculating",
+  retrieve_documents: "Searching your documents",
+  list_uploaded_documents: "Checking uploaded documents",
 };
 
 function toolLabel(tool: string): string {
@@ -46,20 +48,63 @@ function ToolCallChip({ call }: { call: ToolCall }) {
   );
 }
 
+const ACCEPTED_EXTENSIONS = ".pdf,.docx,.txt";
+
+function DocumentChip({ doc, onRemove }: { doc: UploadedDocument; onRemove: (id: string) => void }) {
+  return (
+    <div className={`doc-chip doc-chip-${doc.status}`} title={doc.error}>
+      <span className="doc-chip-icon" aria-hidden="true">
+        {doc.status === "uploading" ? (
+          <span className="tool-spinner" />
+        ) : doc.status === "error" ? (
+          "!"
+        ) : (
+          <span className="tool-check">✓</span>
+        )}
+      </span>
+      <span className="doc-chip-label">{doc.filename}</span>
+      <button
+        type="button"
+        className="doc-chip-remove"
+        aria-label={`Remove ${doc.filename}`}
+        onClick={() => onRemove(doc.id)}
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
 type ChatProps = {
   messages: Message[];
   started: boolean;
   onSend: (text: string) => void;
+  documents: UploadedDocument[];
+  onUploadFiles: (files: FileList) => void;
+  onRemoveDocument: (id: string) => void;
 };
 
-export default function Chat({ messages, started, onSend }: ChatProps) {
+export default function Chat({
+  messages,
+  started,
+  onSend,
+  documents,
+  onUploadFiles,
+  onRemoveDocument,
+}: ChatProps) {
   const [input, setInput] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const text = input;
     setInput("");
     onSend(text);
+  }
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    if (e.target.files?.length) onUploadFiles(e.target.files);
+    e.target.value = "";
   }
 
   return (
@@ -119,7 +164,31 @@ export default function Chat({ messages, started, onSend }: ChatProps) {
         </div>
       )}
 
+      {!!documents.length && (
+        <div className="doc-chips">
+          {documents.map((doc) => (
+            <DocumentChip key={doc.id} doc={doc} onRemove={onRemoveDocument} />
+          ))}
+        </div>
+      )}
+
       <form className="composer" onSubmit={handleSubmit}>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={ACCEPTED_EXTENSIONS}
+          multiple
+          className="hidden"
+          onChange={handleFileChange}
+        />
+        <button
+          type="button"
+          className="attach-btn"
+          aria-label="Upload document"
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <img src="/attach.svg" alt="" />
+        </button>
         <input
           type="text"
           value={input}

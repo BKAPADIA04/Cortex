@@ -3,10 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import Chat from "@/components/Chat";
-import type { Message, Thread, ToolCall } from "@/lib/types";
+import type { Message, Thread, ToolCall, UploadedDocument } from "@/lib/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/chat";
 const STREAM_URL = `${API_URL}/stream`;
+const API_ROOT = API_URL.replace(/\/chat$/, "");
+const DOCUMENTS_URL = `${API_ROOT}/documents`;
 const STORAGE_KEY = "cortex.threads";
 
 function newThread(): Thread {
@@ -16,8 +18,57 @@ function newThread(): Thread {
 export default function ChatApp() {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeId, setActiveId] = useState("");
+  const [documents, setDocuments] = useState<UploadedDocument[]>([]);
   const nextId = useRef(0);
   const hydrated = useRef(false);
+
+  useEffect(() => {
+    fetch(DOCUMENTS_URL)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((docs: { doc_id: string; filename: string; chunks: number }[]) => {
+        setDocuments(docs.map((d) => ({ id: d.doc_id, filename: d.filename, chunks: d.chunks, status: "done" as const })));
+      })
+      .catch(() => {});
+  }, []);
+
+  async function handleUploadFiles(files: FileList) {
+    for (const file of Array.from(files)) {
+      const tempId = crypto.randomUUID();
+      setDocuments((prev) => [...prev, { id: tempId, filename: file.name, status: "uploading" }]);
+
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        const res = await fetch(DOCUMENTS_URL, { method: "POST", body: formData });
+        const body = await res.json().catch(() => ({}));
+
+        if (!res.ok) throw new Error(body.detail || `Upload failed: ${res.status}`);
+
+        setDocuments((prev) =>
+          prev.map((d) =>
+            d.id === tempId
+              ? { id: body.doc_id, filename: body.filename, chunks: body.chunks, pages: body.pages, status: "done" }
+              : d
+          )
+        );
+      } catch (err) {
+        setDocuments((prev) =>
+          prev.map((d) =>
+            d.id === tempId ? { ...d, status: "error", error: (err as Error).message } : d
+          )
+        );
+      }
+    }
+  }
+
+  async function handleRemoveDocument(id: string) {
+    setDocuments((prev) => prev.filter((d) => d.id !== id));
+    try {
+      await fetch(`${DOCUMENTS_URL}/${id}`, { method: "DELETE" });
+    } catch {
+      // Best-effort — the doc chip is already gone from the UI either way.
+    }
+  }
 
   useEffect(() => {
     let initial: Thread[] = [];
@@ -172,7 +223,14 @@ export default function ChatApp() {
         onNewChat={handleNewChat}
         onDelete={handleDelete}
       />
-      <Chat messages={activeThread.messages} started={activeThread.messages.length > 0} onSend={sendMessage} />
+      <Chat
+        messages={activeThread.messages}
+        started={activeThread.messages.length > 0}
+        onSend={sendMessage}
+        documents={documents}
+        onUploadFiles={handleUploadFiles}
+        onRemoveDocument={handleRemoveDocument}
+      />
     </div>
   );
 }

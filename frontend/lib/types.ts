@@ -19,3 +19,12 @@ export type Thread = {
   title: string;
   messages: Message[];
 };
+
+export type UploadedDocument = {
+  id: string;
+  filename: string;
+  chunks?: number;
+  pages?: number | null;
+  status: "uploading" | "done" | "error";
+  error?: string;
+};
