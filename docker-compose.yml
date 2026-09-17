@@ -1,4 +1,12 @@
 services:
+  search:
+    build:
+      context: ./backend
+      dockerfile: mcp_servers/search.Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8100:8100"
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped

@@ -1,9 +1,15 @@
 import asyncio
+import os
 
 from ddgs import DDGS
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("cortex-search", host="127.0.0.1", port=8100)
+# Defaults to localhost-only for a bare `python search_server.py` run; the
+# Docker image overrides this to 0.0.0.0 so the container's published port
+# is reachable from the host.
+SEARCH_MCP_HOST = os.environ.get("SEARCH_MCP_HOST", "127.0.0.1")
+
+mcp = FastMCP("cortex-search", host=SEARCH_MCP_HOST, port=8100)
 
 
 def _search_sync(query: str) -> list[dict]:

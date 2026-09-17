@@ -5,7 +5,7 @@ langchain
 langchain_openai
 langchain-google-genai
 ddgs
-mcp
+mcp<2
 langchain-mcp-adapters
 dotenv
 fastapi

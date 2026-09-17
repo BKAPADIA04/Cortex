@@ -52,7 +52,7 @@ both via `langchain-mcp-adapters`' `MultiServerMCPClient` to discover and bind t
 | Tool               | MCP server                          | Transport                          | Purpose |
 | ------------------- | ------------------------------------ | ------------------------------------ | --------- |
 | `calculator`        | `mcp_servers/calculator_server.py`  | stdio — spawned by the client automatically, no extra process to run | Arithmetic evaluation (`+ - * / // % **`), via a restricted AST parser — no `eval()` |
-| `duckduckgo_search` | `mcp_servers/search_server.py`      | streamable HTTP on `:8100` — must be started as its own process | Web search for current events or facts, via the `ddgs` package (no API key) |
+| `duckduckgo_search` | `mcp_servers/search_server.py`      | streamable HTTP on `:8100` — runs in its own Docker container (`docker compose up -d`) | Web search for current events or facts, via the `ddgs` package (no API key) |
 | `retrieve_documents`, `list_uploaded_documents` | `mcp_servers/rag_server.py` | stdio — spawned by the client automatically, no extra process to run | Search uploaded documents for relevant chunks (with source + page metadata) |
 
 The frontend shows a chip for each tool call as it runs (spinner while in progress, checkmark
@@ -97,11 +97,16 @@ the Chroma index persists under `backend/rag_data/chroma/` (gitignored).
 
 ## Running locally
 
-**1. Start Postgres** (chat history is persisted here via LangGraph's `AsyncPostgresSaver`):
+**1. Start Postgres and the search MCP server:**
 
 ```bash
-docker compose up -d postgres
+docker compose up -d
 ```
+
+This starts Postgres (chat history, via LangGraph's `AsyncPostgresSaver`) and the DuckDuckGo
+search MCP server (streamable HTTP, `:8100`, built from `backend/mcp_servers/search.Dockerfile`).
+The calculator and RAG tools don't need a container — they run over stdio, spawned automatically
+by the backend process itself.
 
 **2. Set environment variables** in `.env` at the repo root:
 
@@ -129,24 +134,23 @@ RAG_EMBEDDING_MODEL=models/gemini-embedding-001
 
 RAG uses `GOOGLE_API_KEY` for embeddings too — no separate credential needed.
 
-**3. Start the search MCP server, backend, and frontend in three separate terminals:**
+**3. Start the backend and frontend in two separate terminals:**
 
 ```bash
-# terminal 1 — DuckDuckGo search MCP server (streamable HTTP, :8100)
-cd backend && source ../.venv/bin/activate && python mcp_servers/search_server.py
-```
-
-```bash
-# terminal 2 — backend API (also spawns the calculator MCP server over stdio)
+# terminal 1 — backend API (also spawns the calculator and RAG MCP servers over stdio)
 cd backend && source ../.venv/bin/activate && uvicorn server:app --port 8000
 ```
 
 ```bash
-# terminal 3 — frontend (Next.js)
+# terminal 2 — frontend (Next.js)
 cd frontend && npm install && npm run dev -- --port 5500
 ```
 
 **4. Open [http://localhost:5500](http://localhost:5500)** in your browser.
+
+Prefer to run the search server locally instead of in Docker (e.g. for debugging)? Run
+`cd backend && source ../.venv/bin/activate && python mcp_servers/search_server.py` in its own
+terminal instead of step 1's `search` container.
 
 The frontend reads the backend URL from `NEXT_PUBLIC_API_URL` (see
 `frontend/.env.local.example`); copy it to `.env.local` to override the default of

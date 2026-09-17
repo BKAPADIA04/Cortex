@@ -60,8 +60,9 @@ async def build_chatbot():
     lifespan handler). The calculator and RAG retrieval tools are served
     over stdio — the MCP client spawns their scripts itself, per call, no
     separate process to run. The search tool is served over streamable
-    HTTP — `mcp_servers/search_server.py` must already be running
-    (defaults to http://127.0.0.1:8100/mcp, override via SEARCH_MCP_URL).
+    HTTP — `docker compose up -d` must already be running the `search`
+    container (defaults to http://127.0.0.1:8100/mcp, override via
+    SEARCH_MCP_URL).
 
     Returns (compiled_graph, pool) — the caller owns the pool's lifecycle
     and must await pool.close() on shutdown.
