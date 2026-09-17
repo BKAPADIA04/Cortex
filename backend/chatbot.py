@@ -4,7 +4,7 @@ from pathlib import Path
 
 from langgraph.graph import StateGraph, START, END
 from typing import TypedDict, Annotated
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -19,8 +19,16 @@ load_dotenv()
 DATABASE_URL = os.environ["DATABASE_URL"]
 SEARCH_MCP_URL = os.environ.get("SEARCH_MCP_URL", "http://127.0.0.1:8100/mcp")
 CALCULATOR_SERVER_SCRIPT = str(Path(__file__).parent / "mcp_servers" / "calculator_server.py")
+RAG_SERVER_SCRIPT = str(Path(__file__).parent / "mcp_servers" / "rag_server.py")
 
 llm = ChatGoogleGenerativeAI(model = 'gemini-3.6-flash')
+
+SYSTEM_PROMPT = SystemMessage(content=(
+    "You are Cortex, a helpful assistant. When you use retrieve_documents to "
+    "answer from an uploaded document, cite the source after the relevant "
+    "sentence, e.g. (report.pdf, page 3). If retrieval finds nothing relevant, "
+    "say so instead of guessing."
+))
 
 
 class ChatbotState(TypedDict):
@@ -32,7 +40,7 @@ def _build_graph(tools):
 
     async def chat_node(state: ChatbotState):
         messages = state['messages']
-        response = await llm_with_tools.ainvoke(messages)
+        response = await llm_with_tools.ainvoke([SYSTEM_PROMPT, *messages])
         return {'messages': [response]}
 
     graph = StateGraph(ChatbotState)
@@ -49,8 +57,8 @@ async def build_chatbot():
     and compile the graph.
 
     Must be awaited from within a running event loop (e.g. a FastAPI
-    lifespan handler). The calculator tool is served over stdio — the MCP
-    client spawns `mcp_servers/calculator_server.py` itself, per call, no
+    lifespan handler). The calculator and RAG retrieval tools are served
+    over stdio — the MCP client spawns their scripts itself, per call, no
     separate process to run. The search tool is served over streamable
     HTTP — `mcp_servers/search_server.py` must already be running
     (defaults to http://127.0.0.1:8100/mcp, override via SEARCH_MCP_URL).
@@ -63,6 +71,11 @@ async def build_chatbot():
             "transport": "stdio",
             "command": sys.executable,
             "args": [CALCULATOR_SERVER_SCRIPT],
+        },
+        "rag": {
+            "transport": "stdio",
+            "command": sys.executable,
+            "args": [RAG_SERVER_SCRIPT],
         },
         "search": {
             "transport": "streamable_http",
