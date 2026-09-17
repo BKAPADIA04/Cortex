@@ -15,6 +15,9 @@ env/
 # Environment variables
 .env
 
+# RAG uploads + vector store
+backend/rag_data/
+
 # Testing / coverage
 .pytest_cache/
 .coverage

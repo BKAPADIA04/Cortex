@@ -10,3 +10,12 @@ langchain-mcp-adapters
 dotenv
 fastapi
 uvicorn
+python-multipart
+langchain-chroma
+langchain-text-splitters
+pypdf
+python-docx
+
+# dev / test
+pytest
+pytest-asyncio
