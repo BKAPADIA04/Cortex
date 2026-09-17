@@ -22,7 +22,7 @@ generation (RAG) pipeline, with source citations.
 | API               | [FastAPI](https://fastapi.tiangolo.com/) + `uvicorn`, fully async, streaming responses over HTTP |
 | Conversation memory | [PostgreSQL](https://www.postgresql.org/) via LangGraph's `AsyncPostgresSaver` checkpointer |
 | Observability     | [LangSmith](https://smith.langchain.com/) — traces every graph run, node, and LLM call |
-| Tools             | [MCP](https://modelcontextprotocol.io/) servers for web search (DuckDuckGo), a calculator, and document retrieval (RAG), called through a LangGraph `ToolNode` |
+| Tools             | [MCP](https://modelcontextprotocol.io/) servers for web search (DuckDuckGo), a calculator, and document retrieval (RAG), called through a custom tool-executing node with human-in-the-loop approval gates |
 | RAG / vector store | [Chroma](https://www.trychroma.com/) (local, persisted to disk) via `langchain-chroma`, chunked with `langchain-text-splitters`, embedded with `langchain-google-genai` |
 | Document parsing  | `pypdf` (PDF, per-page), `python-docx` (DOCX), built-in (TXT)                |
 | Frontend          | [Next.js](https://nextjs.org/) (App Router) + React + TypeScript             |
@@ -42,6 +42,10 @@ generation (RAG) pipeline, with source citations.
 - Upload PDF/DOCX/TXT documents (button next to the chat input) and ask questions about them —
   the agent retrieves relevant chunks and cites the source document (and page, for PDFs) in its
   answer. The chatbot works exactly as before when no document is uploaded.
+- Human-in-the-loop controls — the agent pauses for your approval before running a web search or
+  document retrieval, lets you review and filter retrieved passages before it answers from them,
+  and asks for confirmation before deleting an uploaded document. See
+  [Human-in-the-loop](#human-in-the-loop) below.
 
 ## Tools
 
@@ -57,6 +61,41 @@ both via `langchain-mcp-adapters`' `MultiServerMCPClient` to discover and bind t
 
 The frontend shows a chip for each tool call as it runs (spinner while in progress, checkmark
 when done) above the streamed reply.
+
+## Human-in-the-loop
+
+The agent doesn't act unsupervised. Three checkpoints pause the graph (or the UI) for a human
+decision before anything irreversible or externally-visible happens:
+
+1. **Tool-call approval** — before `duckduckgo_search` or `retrieve_documents` runs, the graph
+   pauses via LangGraph's `interrupt()` and the frontend shows an Allow/Deny card for the pending
+   call(s). `calculator` is exempt (pure, side-effect-free) and always runs immediately. Denying a
+   call feeds the agent a `"Denied by user"` tool result instead of executing it, so it can adjust
+   its answer accordingly.
+2. **Retrieval review** — after `retrieve_documents` is approved and executed, the retrieved
+   passages are shown to the user (source + text) before the agent sees them, with a checkbox per
+   passage. Only the passages left checked are passed on to the LLM to answer from — excluding all
+   of them tells the agent nothing relevant was found.
+3. **Document delete confirmation** — removing an uploaded document (the × on its chip) prompts a
+   confirmation dialog before the `DELETE /documents/{doc_id}` request fires, since the chunks are
+   removed from Chroma permanently.
+
+Implementation:
+
+- **Backend** — `backend/chatbot.py`'s `execute_tools` node (replacing the prebuilt `ToolNode`)
+  calls `interrupt()` for gated tools (`APPROVAL_REQUIRED_TOOLS`) and again per
+  `retrieve_documents` call to surface its parsed chunks. Interrupts are just another paused graph
+  state, persisted by the existing Postgres checkpointer, so they survive backend restarts.
+- **API** — `POST /chat/stream` now also emits an `{"type": "interrupt", "payload": {...}}` event
+  when the graph pauses; `POST /chat/resume` resumes it with a human decision
+  (`{"thread_id": ..., "value": {"decisions": {...}} }` for approvals, `{"selected": [...]}` for
+  retrieval review) via LangGraph's `Command(resume=...)`.
+- **Frontend** — `frontend/components/InterruptCard.tsx` renders the approval/review UI inline in
+  the chat thread; `frontend/components/ConfirmDialog.tsx` is the generic confirm modal used for
+  document deletion.
+
+To require approval for additional tools, add their names to `APPROVAL_REQUIRED_TOOLS` in
+`backend/chatbot.py`.
 
 ## Document upload & RAG
 
