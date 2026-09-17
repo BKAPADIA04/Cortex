@@ -51,7 +51,7 @@ function ToolCallChip({ call }: { call: ToolCall }) {
 
 const ACCEPTED_EXTENSIONS = ".pdf,.docx,.txt";
 
-function DocumentChip({ doc, onRemove }: { doc: UploadedDocument; onRemove: (id: string) => void }) {
+function DocumentChip({ doc, onRemove }: { doc: UploadedDocument; onRemove: (doc: UploadedDocument) => void }) {
   return (
     <div className={`doc-chip doc-chip-${doc.status}`} title={doc.error}>
       <span className="doc-chip-icon" aria-hidden="true">
@@ -68,7 +68,7 @@ function DocumentChip({ doc, onRemove }: { doc: UploadedDocument; onRemove: (id:
         type="button"
         className="doc-chip-remove"
         aria-label={`Remove ${doc.filename}`}
-        onClick={() => onRemove(doc.id)}
+        onClick={() => onRemove(doc)}
       >
         ×
       </button>
@@ -82,7 +82,7 @@ type ChatProps = {
   onSend: (text: string) => void;
   documents: UploadedDocument[];
   onUploadFiles: (files: FileList) => void;
-  onRemoveDocument: (id: string) => void;
+  onRemoveDocument: (doc: UploadedDocument) => void;
   onResolveInterrupt: (messageId: number, value: unknown) => void;
 };
 

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import Chat from "@/components/Chat";
+import ConfirmDialog from "@/components/ConfirmDialog";
 import type { Message, PendingInterrupt, Thread, ToolCall, UploadedDocument } from "@/lib/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/chat";
@@ -20,6 +21,7 @@ export default function ChatApp() {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeId, setActiveId] = useState("");
   const [documents, setDocuments] = useState<UploadedDocument[]>([]);
+  const [docPendingDelete, setDocPendingDelete] = useState<UploadedDocument | null>(null);
   const nextId = useRef(0);
   const hydrated = useRef(false);
 
@@ -62,10 +64,17 @@ export default function ChatApp() {
     }
   }
 
-  async function handleRemoveDocument(id: string) {
-    setDocuments((prev) => prev.filter((d) => d.id !== id));
+  function handleRequestRemoveDocument(doc: UploadedDocument) {
+    setDocPendingDelete(doc);
+  }
+
+  async function confirmRemoveDocument() {
+    const doc = docPendingDelete;
+    if (!doc) return;
+    setDocPendingDelete(null);
+    setDocuments((prev) => prev.filter((d) => d.id !== doc.id));
     try {
-      await fetch(`${DOCUMENTS_URL}/${id}`, { method: "DELETE" });
+      await fetch(`${DOCUMENTS_URL}/${doc.id}`, { method: "DELETE" });
     } catch {
       // Best-effort — the doc chip is already gone from the UI either way.
     }
@@ -267,9 +276,19 @@ export default function ChatApp() {
         onSend={sendMessage}
         documents={documents}
         onUploadFiles={handleUploadFiles}
-        onRemoveDocument={handleRemoveDocument}
+        onRemoveDocument={handleRequestRemoveDocument}
         onResolveInterrupt={(messageId, value) => resolveInterrupt(activeThread.id, messageId, value)}
       />
+      {docPendingDelete && (
+        <ConfirmDialog
+          title={`Delete "${docPendingDelete.filename}"?`}
+          description="This removes it and its indexed chunks permanently — Cortex won't be able to search it anymore."
+          confirmLabel="Delete"
+          danger
+          onConfirm={confirmRemoveDocument}
+          onCancel={() => setDocPendingDelete(null)}
+        />
+      )}
     </div>
   );
 }
