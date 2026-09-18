@@ -3,8 +3,8 @@
 A stateful AI chatbot built with LangGraph — persistent memory, streaming responses, and
 multi-threaded conversations, wired up end to end from a Gemini-backed agent to a Next.js UI. It
 can also answer questions from documents you upload (PDF/DOCX/TXT) via a retrieval-augmented
-generation (RAG) pipeline, with source citations, and recall prefilled facts about the user across
-sessions via a Postgres-backed long-term memory (LTM) store.
+generation (RAG) pipeline, with source citations, and recall (and, with your approval, save) facts
+about the user across sessions via a Postgres-backed long-term memory (LTM) store.
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
@@ -22,7 +22,7 @@ sessions via a Postgres-backed long-term memory (LTM) store.
 | LLM               | [Gemini](https://ai.google.dev/) via `langchain-google-genai`                |
 | API               | [FastAPI](https://fastapi.tiangolo.com/) + `uvicorn`, fully async, streaming responses over HTTP |
 | Conversation memory | [PostgreSQL](https://www.postgresql.org/) via LangGraph's `AsyncPostgresSaver` checkpointer |
-| Long-term memory (LTM) | Postgres + [pgvector](https://github.com/pgvector/pgvector) — same database as conversation memory, a second table holding prefilled, per-user facts retrieved by semantic search |
+| Long-term memory (LTM) | Postgres + [pgvector](https://github.com/pgvector/pgvector) — same database as conversation memory, a second table holding per-user facts, prefilled and agent-written, retrieved (and upserted) by semantic search |
 | Observability     | [LangSmith](https://smith.langchain.com/) — traces every graph run, node, and LLM call |
 | Tools             | [MCP](https://modelcontextprotocol.io/) servers for web search (DuckDuckGo), a calculator, and document retrieval (RAG), called through a custom tool-executing node with human-in-the-loop approval gates |
 | RAG / vector store | [Chroma](https://www.trychroma.com/) (local, persisted to disk) via `langchain-chroma`, chunked with `langchain-text-splitters`, embedded with `langchain-google-genai` |
@@ -44,12 +44,13 @@ sessions via a Postgres-backed long-term memory (LTM) store.
 - Upload PDF/DOCX/TXT documents (button next to the chat input) and ask questions about them —
   the agent retrieves relevant chunks and cites the source document (and page, for PDFs) in its
   answer. The chatbot works exactly as before when no document is uploaded.
-- Human-in-the-loop controls — the agent pauses for your approval before running a web search or
-  document retrieval, lets you review and filter retrieved passages before it answers from them,
-  and asks for confirmation before deleting an uploaded document. See
+- Human-in-the-loop controls — the agent pauses for your approval before running a web search,
+  document retrieval, or long-term memory write, lets you review and filter retrieved passages
+  before it answers from them, and asks for confirmation before deleting an uploaded document. See
   [Human-in-the-loop](#human-in-the-loop) below.
-- Long-term memory — the agent can recall prefilled facts about the user (profile, preferences,
-  settings) across sessions and threads via semantic search over a Postgres/pgvector store. See
+- Long-term memory — the agent can recall facts about the user (profile, preferences, settings)
+  across sessions and threads via semantic search over a Postgres/pgvector store, and save new
+  ones as it learns them, with your approval before anything is written. See
   [Long-term memory](#long-term-memory-ltm) below.
 
 ## Tools
@@ -63,11 +64,12 @@ both via `langchain-mcp-adapters`' `MultiServerMCPClient` to discover and bind t
 | `calculator`        | `mcp_servers/calculator_server.py`  | stdio — spawned by the client automatically, no extra process to run | Arithmetic evaluation (`+ - * / // % **`), via a restricted AST parser — no `eval()` |
 | `duckduckgo_search` | `mcp_servers/search_server.py`      | streamable HTTP on `:8100` — runs in its own Docker container (`docker compose up -d`) | Web search for current events or facts, via the `ddgs` package (no API key) |
 | `retrieve_documents`, `list_uploaded_documents` | `mcp_servers/rag_server.py` | stdio — spawned by the client automatically, no extra process to run | Search uploaded documents for relevant chunks (with source + page metadata) |
-| `search_memory`      | not MCP — a plain LangChain tool built in `chatbot.py`, bound directly to the app's Postgres pool | in-process | Semantic search over the calling user's long-term memory (see [Long-term memory](#long-term-memory-ltm)) |
+| `search_memory`, `save_memory` | not MCP — plain LangChain tools built in `chatbot.py`, bound directly to the app's Postgres pool | in-process | Semantic search and (approval-gated) upsert over the calling user's long-term memory (see [Long-term memory](#long-term-memory-ltm)) |
 
-`search_memory` is deliberately not an MCP server like the others: it needs to know which user is
-asking, and that identity must come from the trusted request context (`user_id` in `configurable`,
-via `langgraph.config.get_config()`), never as a tool argument the model could supply or spoof.
+`search_memory`/`save_memory` are deliberately not MCP servers like the others: they need to know
+which user is asking, and that identity must come from the trusted request context (`user_id` in
+`configurable`, via `langgraph.config.get_config()`), never as a tool argument the model could
+supply or spoof.
 
 The frontend shows a chip for each tool call as it runs (spinner while in progress, checkmark
 when done) above the streamed reply.
@@ -77,11 +79,12 @@ when done) above the streamed reply.
 The agent doesn't act unsupervised. Three checkpoints pause the graph (or the UI) for a human
 decision before anything irreversible or externally-visible happens:
 
-1. **Tool-call approval** — before `duckduckgo_search` or `retrieve_documents` runs, the graph
-   pauses via LangGraph's `interrupt()` and the frontend shows an Allow/Deny card for the pending
-   call(s). `calculator` is exempt (pure, side-effect-free) and always runs immediately. Denying a
-   call feeds the agent a `"Denied by user"` tool result instead of executing it, so it can adjust
-   its answer accordingly.
+1. **Tool-call approval** — before `duckduckgo_search`, `retrieve_documents`, or `save_memory`
+   runs, the graph pauses via LangGraph's `interrupt()` and the frontend shows an Allow/Deny card
+   for the pending call(s), with the exact content it wants to save for `save_memory`. `calculator`
+   and `search_memory` are exempt (pure, side-effect-free reads) and always run immediately.
+   Denying a call feeds the agent a `"Denied by user"` tool result instead of executing it, so it
+   can adjust its answer accordingly.
 2. **Retrieval review** — after `retrieve_documents` is approved and executed, the retrieved
    passages are shown to the user (source + text) before the agent sees them, with a checkbox per
    passage. Only the passages left checked are passed on to the LLM to answer from — excluding all
@@ -147,39 +150,53 @@ the Chroma index persists under `backend/rag_data/chroma/` (gitignored).
 ## Long-term memory (LTM)
 
 Separate from conversation memory (which persists message history per thread) and RAG (which
-retrieves from documents you upload), LTM is a small, **prefilled** store of standing facts about
-the user — name, preferences, settings, notes from prior sessions — that the agent can recall in
-any thread. The chatbot never writes to it itself; it's seeded ahead of time and only ever read
-via the `search_memory` tool.
+retrieves from documents you upload), LTM is a store of standing facts about the user — name,
+preferences, settings, notes — that the agent can recall in any thread. It starts **prefilled**
+(seeded ahead of time from a file you edit) and grows **as the agent learns things**, with your
+approval before anything is written.
 
 ```text
-seed_data.py (edited by you) → python -m ltm.seed → embed (Gemini) → store (Postgres/pgvector)
-
-User Query → chat_node decides to call search_memory → cosine-similarity search, scoped to the
-           requesting user_id → matching facts returned to the LLM → personalized answer
+seed_data.py (edited by you) → python -m ltm.seed ─┐
+                                                     ├─→ embed (Gemini) → upsert (Postgres/pgvector)
+User says "remember X" / mentions a durable fact ──┘     (near-duplicate in the same category
+           → chat_node calls save_memory → approval card  → Allow → upsert                updates
+                                                                                            in place;
+User Query → chat_node calls search_memory → cosine-similarity search, scoped to the      otherwise
+           requesting user_id → matching facts returned to the LLM → personalized answer  inserted)
 ```
 
 Key pieces:
 
 - **Store** — `backend/ltm/store.py`: `ensure_schema()` creates the `vector` extension, the
   `ltm_memories` table, and a `user_id` index on first run (sizing the vector column from a live
-  embedding call rather than a hardcoded dimension); `add_memory()` and `search_memory()` embed
-  with the same Gemini model the RAG store uses.
-- **Seeding** — `backend/ltm/seed_data.py` holds the actual facts, grouped by category
-  (`profile`, `setting`, `note`); edit that list to change what the bot "remembers," then run:
+  embedding call rather than a hardcoded dimension). `search_memory()` reads; `upsert_memory()`
+  writes — both embed with the same Gemini model the RAG store uses.
+- **Writing / dedup** — `upsert_memory()` looks for the nearest existing memory *in the same
+  user_id + category* and, if it's within `LTM_DEDUPE_THRESHOLD` (cosine distance), updates that
+  row in place instead of inserting a new one — so re-saving "preferred language: Rust" over an
+  old "preferred language: Python" replaces it rather than piling up. Category-scoping the match
+  matters: plain topical similarity is too coarse on its own (a "name" fact and an unrelated "note"
+  can land close together in embedding space just for sharing a subject). Still a similarity
+  heuristic, not true conflict detection — it can miss a contradiction worded very differently, or
+  merge two same-category rows that are close but distinct.
+- **Seeding** — `backend/ltm/seed_data.py` holds the starting facts, grouped by category
+  (`profile`, `setting`, `note`); edit that list to change what the bot starts out "remembering,"
+  then run:
 
   ```bash
   cd backend && source ../.venv/bin/activate
-  python -m ltm.seed            # load/append the seed data
+  python -m ltm.seed            # load the seed data (upserts — safe to re-run)
   python -m ltm.seed --reset    # wipe existing rows for the seeded users first, then load
   ```
 
-- **Tool** — `search_memory`, wired into `chatbot.py`'s tool list (see [Tools](#tools)). The
-  system prompt tells the model to use it proactively to personalize answers, not just when asked
-  directly.
+- **Tools** — `search_memory` (always runs, pure read) and `save_memory` (gated — see
+  [Human-in-the-loop](#human-in-the-loop)), wired into `chatbot.py`'s tool list (see
+  [Tools](#tools)). The system prompt tells the model to search proactively to personalize
+  answers, and to save both on explicit request ("remember that...") and proactively when it
+  notices a durable fact — but not one-off details specific to the current conversation.
 - **Per-user scoping** — every chat request carries a `user_id` (see `ChatRequest` /
   `ChatResumeRequest` in `backend/server.py`, default `"default"`), threaded into the graph's
-  `configurable` alongside `thread_id`. `search_memory` reads it via `get_config()` at call time,
+  `configurable` alongside `thread_id`. Both memory tools read it via `get_config()` at call time,
   so memories stay scoped to whoever is actually asking regardless of which thread they're in.
   **Note:** the frontend doesn't send a real per-user id yet, so all conversations currently share
   the `"default"` memory scope — see [Limitations](#limitations).
@@ -224,6 +241,7 @@ RAG_EMBEDDING_MODEL=models/gemini-embedding-001
 # optional — LTM tuning (defaults shown)
 LTM_EMBEDDING_MODEL=models/gemini-embedding-001
 LTM_RETRIEVAL_K=5
+LTM_DEDUPE_THRESHOLD=0.28
 ```
 
 RAG uses `GOOGLE_API_KEY` for embeddings too — no separate credential needed. So does LTM (see
@@ -283,9 +301,9 @@ embeddings stub — no `GOOGLE_API_KEY` or network access required.
   uploaded documents.
 - Large PDFs are parsed synchronously inside the upload request; very large files will make the
   upload call slow rather than returning immediately and processing in the background.
-- LTM is prefilled only — nothing the agent learns during a conversation is written back to it;
-  updating what it "remembers" means editing `backend/ltm/seed_data.py` and re-running the seed
-  script.
+- LTM dedup/update is a cosine-similarity heuristic scoped to same user + category — it can miss a
+  contradicting fact worded very differently (leaving both the old and new fact stored), or merge
+  two distinct facts that happen to be very similar within the same category.
 - The frontend doesn't yet send a real per-user identifier, so every conversation currently shares
   the same `"default"` LTM scope — the per-user schema and API are in place, but true isolation
   needs auth (or at least a stable per-browser id) wired up in `frontend/components/ChatApp.tsx`.
