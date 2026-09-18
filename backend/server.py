@@ -36,10 +36,12 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str
     thread_id: str = "default"
+    user_id: str = "default"
 
 
 class ChatResumeRequest(BaseModel):
     thread_id: str = "default"
+    user_id: str = "default"
     value: dict
 
 
@@ -63,15 +65,15 @@ class DocumentSummaryResponse(BaseModel):
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    config = {"configurable": {"thread_id": request.thread_id}}
+    config = {"configurable": {"thread_id": request.thread_id, "user_id": request.user_id}}
     result = await app.state.chatbot.ainvoke(
         {"messages": [HumanMessage(content=request.message)]}, config=config
     )
     return ChatResponse(response=result["messages"][-1].text)
 
 
-def _stream_graph(graph_input, thread_id: str) -> StreamingResponse:
-    config = {"configurable": {"thread_id": thread_id}}
+def _stream_graph(graph_input, thread_id: str, user_id: str) -> StreamingResponse:
+    config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
 
     async def event_generator():
         try:
@@ -117,7 +119,9 @@ def _stream_graph(graph_input, thread_id: str) -> StreamingResponse:
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
-    return _stream_graph({"messages": [HumanMessage(content=request.message)]}, request.thread_id)
+    return _stream_graph(
+        {"messages": [HumanMessage(content=request.message)]}, request.thread_id, request.user_id
+    )
 
 
 @app.post("/chat/resume")
@@ -125,7 +129,7 @@ async def chat_resume(request: ChatResumeRequest):
     """Resume a graph run paused on `interrupt()` — the human's tool-approval
     or retrieval-review decision goes in `value`, and the stream continues
     with the same event format as /chat/stream."""
-    return _stream_graph(Command(resume=request.value), request.thread_id)
+    return _stream_graph(Command(resume=request.value), request.thread_id, request.user_id)
 
 
 @app.post("/documents", response_model=DocumentResponse)
