@@ -1,8 +1,8 @@
 """Load ltm.seed_data.SEED_MEMORIES into the LTM store.
 
 Usage:
-    python -m ltm.seed            # append the seed data
-    python -m ltm.seed --reset    # wipe existing rows for these users first
+    python -m ltm.seed            # load the seed data, updating near-duplicates in place
+    python -m ltm.seed --reset    # wipe existing rows for these users first, then load
 
 Requires DATABASE_URL and a Google API key (GOOGLE_API_KEY) in the
 environment, same as the main app — see backend/.env.
@@ -41,10 +41,13 @@ async def main(reset: bool) -> None:
             print(f"Cleared existing memories for {len(user_ids)} user(s).")
 
         for memory in SEED_MEMORIES:
-            memory_id = await store.add_memory(
+            result = await store.upsert_memory(
                 pool, memory["user_id"], memory["content"], memory.get("category", "fact")
             )
-            print(f"[{memory_id}] ({memory['user_id']}/{memory.get('category', 'fact')}) {memory['content']}")
+            print(
+                f"[{result['id']}] {result['action']} ({memory['user_id']}/"
+                f"{memory.get('category', 'fact')}) {memory['content']}"
+            )
 
         print(f"Seeded {len(SEED_MEMORIES)} memories.")
     finally:

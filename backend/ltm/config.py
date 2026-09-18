@@ -11,3 +11,9 @@ EMBEDDING_MODEL = os.environ.get("LTM_EMBEDDING_MODEL", "models/gemini-embedding
 DEFAULT_USER_ID = "default"
 
 RETRIEVAL_K = int(os.environ.get("LTM_RETRIEVAL_K", "5"))
+
+# Cosine-distance threshold (0 = identical, higher = less similar) below
+# which save_memory updates an existing row instead of inserting a new one.
+# Tune down if unrelated facts are getting merged, up if near-duplicates keep
+# piling up.
+DEDUPE_THRESHOLD = float(os.environ.get("LTM_DEDUPE_THRESHOLD", "0.28"))
