@@ -13,6 +13,7 @@ uvicorn
 python-multipart
 langchain-chroma
 langchain-text-splitters
+pgvector
 pypdf
 python-docx
 

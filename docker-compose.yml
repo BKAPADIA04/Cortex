@@ -8,7 +8,9 @@ services:
       - "8100:8100"
 
   postgres:
-    image: postgres:16-alpine
+    # pgvector/pgvector:pg16 is postgres:16 plus the pgvector extension,
+    # needed for the LTM store's semantic search (backend/ltm).
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: cortex
