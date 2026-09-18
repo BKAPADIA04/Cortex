@@ -9,12 +9,17 @@ from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from dotenv import load_dotenv
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.config import get_config
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import tools_condition
 from langgraph.types import interrupt
+from langchain_core.tools import tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
+
+from ltm import store as ltm_store
+from ltm.config import DEFAULT_USER_ID
 
 load_dotenv()
 
@@ -29,7 +34,9 @@ SYSTEM_PROMPT = SystemMessage(content=(
     "You are Cortex, a helpful assistant. When you use retrieve_documents to "
     "answer from an uploaded document, cite the source after the relevant "
     "sentence, e.g. (report.pdf, page 3). If retrieval finds nothing relevant, "
-    "say so instead of guessing."
+    "say so instead of guessing. Use search_memory to recall known facts about "
+    "the user (name, preferences, settings, prior context) whenever they'd help "
+    "you personalize or ground your answer — not just when asked directly."
 ))
 
 
@@ -57,6 +64,36 @@ def _parse_retrieved_chunks(text: str) -> list[dict] | None:
             return None
         chunks.append({"index": int(match.group(1)), "source": match.group(2), "text": match.group(3)})
     return chunks or None
+
+
+def _make_search_memory_tool(pool: AsyncConnectionPool):
+    """Build the search_memory tool bound to this app's connection pool.
+
+    Not an MCP tool (unlike calculator/rag/search) because it needs the
+    calling user's identity, which the LLM must never supply itself — it's
+    read from the run's `configurable.user_id` via get_config(), the same
+    contextvar-based channel LangGraph uses for thread_id, rather than from
+    a tool argument the model could spoof or omit.
+    """
+
+    @tool
+    async def search_memory(query: str) -> str:
+        """Search long-term memory for facts about the current user —
+        profile info, preferences, settings, and notes from prior sessions.
+        Use this to personalize answers or recall context the user hasn't
+        restated in this conversation.
+
+        Args:
+            query: What to look for, phrased as a natural-language question
+                or topic (e.g. "preferred programming language").
+        """
+        user_id = get_config().get("configurable", {}).get("user_id", DEFAULT_USER_ID)
+        results = await ltm_store.search_memory(pool, user_id, query)
+        if not results:
+            return "No relevant long-term memory found for this user."
+        return "\n".join(f"- ({r['category']}) {r['content']}" for r in results)
+
+    return search_memory
 
 
 def _build_graph(tools):
@@ -152,7 +189,7 @@ async def build_chatbot():
             "url": SEARCH_MCP_URL,
         },
     })
-    tools = await mcp_client.get_tools()
+    mcp_tools = await mcp_client.get_tools()
 
     pool = AsyncConnectionPool(
         conninfo=DATABASE_URL,
@@ -162,6 +199,9 @@ async def build_chatbot():
     await pool.open()
     checkpointer = AsyncPostgresSaver(pool)
     await checkpointer.setup()
+    await ltm_store.ensure_schema(pool)
+
+    tools = [*mcp_tools, _make_search_memory_tool(pool)]
 
     graph = _build_graph(tools)
     return graph.compile(checkpointer=checkpointer), pool
