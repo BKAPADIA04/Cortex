@@ -6,6 +6,7 @@ import type { PendingInterrupt } from "@/lib/types";
 const TOOL_LABELS: Record<string, string> = {
   duckduckgo_search: "Search the web",
   retrieve_documents: "Search your documents",
+  save_memory: "Save to memory",
 };
 
 function toolQuery(input: unknown): string | null {

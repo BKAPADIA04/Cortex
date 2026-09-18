@@ -36,7 +36,13 @@ SYSTEM_PROMPT = SystemMessage(content=(
     "sentence, e.g. (report.pdf, page 3). If retrieval finds nothing relevant, "
     "say so instead of guessing. Use search_memory to recall known facts about "
     "the user (name, preferences, settings, prior context) whenever they'd help "
-    "you personalize or ground your answer — not just when asked directly."
+    "you personalize or ground your answer — not just when asked directly. Use "
+    "save_memory to record durable facts about the user as you learn them — both "
+    "when they explicitly ask you to remember something, and proactively when "
+    "they mention a stable preference, setting, or fact about themselves worth "
+    "recalling in future conversations. Don't save one-off details specific to "
+    "this conversation (e.g. today's task) or anything the user says only in "
+    "passing — save what would still be true and useful next week."
 ))
 
 
@@ -45,8 +51,9 @@ class ChatbotState(TypedDict):
 
 
 # Tools whose calls pause the graph for a human approve/deny decision before
-# they run. Left out: calculator (pure, side-effect-free computation).
-APPROVAL_REQUIRED_TOOLS = {"duckduckgo_search", "retrieve_documents"}
+# they run. Left out: calculator (pure, side-effect-free computation),
+# search_memory (pure read).
+APPROVAL_REQUIRED_TOOLS = {"duckduckgo_search", "retrieve_documents", "save_memory"}
 RETRIEVAL_TOOL = "retrieve_documents"
 
 _CHUNK_BLOCK_RE = re.compile(r"^\[(\d+)\] Source: (.+?)\n([\s\S]*)$")
@@ -94,6 +101,41 @@ def _make_search_memory_tool(pool: AsyncConnectionPool):
         return "\n".join(f"- ({r['category']}) {r['content']}" for r in results)
 
     return search_memory
+
+
+def _make_save_memory_tool(pool: AsyncConnectionPool):
+    """Build the save_memory tool bound to this app's connection pool.
+
+    Gated behind APPROVAL_REQUIRED_TOOLS — the frontend shows an Allow/Deny
+    card with the exact fact before it's written, since writes persist
+    across every future session, unlike a read. Scoped to the calling user
+    the same way as search_memory (get_config(), never a tool argument).
+    """
+
+    @tool
+    async def save_memory(content: str, category: str = "fact") -> str:
+        """Save a durable fact about the current user to long-term memory,
+        for recall in future conversations. Use for things worth remembering
+        beyond this conversation — the user's name, preferences, settings,
+        or stable context — not one-off details specific to right now.
+
+        If a very similar memory already exists, this updates it in place
+        rather than creating a duplicate (e.g. saving a new preferred
+        language replaces the old one).
+
+        Args:
+            content: The fact to remember, as a short, self-contained
+                statement (e.g. "preferred programming language: Rust").
+            category: One of "profile" (stable identity facts), "setting"
+                (preferences/config), or "note" (other context). Defaults
+                to "fact" if unsure.
+        """
+        user_id = get_config().get("configurable", {}).get("user_id", DEFAULT_USER_ID)
+        result = await ltm_store.upsert_memory(pool, user_id, content, category)
+        verb = "Updated an existing similar memory" if result["action"] == "updated" else "Saved a new memory"
+        return f"{verb}: {content}"
+
+    return save_memory
 
 
 def _build_graph(tools):
@@ -201,7 +243,7 @@ async def build_chatbot():
     await checkpointer.setup()
     await ltm_store.ensure_schema(pool)
 
-    tools = [*mcp_tools, _make_search_memory_tool(pool)]
+    tools = [*mcp_tools, _make_search_memory_tool(pool), _make_save_memory_tool(pool)]
 
     graph = _build_graph(tools)
     return graph.compile(checkpointer=checkpointer), pool
